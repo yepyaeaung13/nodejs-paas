@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+cmd="${SSH_ORIGINAL_COMMAND:-}"
+
+case "$cmd" in
+  git-receive-pack*)
+    ;;
+  *)
+    echo "NodePaaS only accepts git pushes." >&2
+    exit 1
+    ;;
+esac
+
+repo_arg="${cmd#git-receive-pack}"
+repo_arg="${repo_arg# }"
+repo_arg="${repo_arg#\'}"
+repo_arg="${repo_arg%\'}"
+
+case "$repo_arg" in
+  *.git)
+    slug="${repo_arg%.git}"
+    ;;
+  *)
+    echo "Invalid repository name." >&2
+    exit 1
+    ;;
+esac
+
+case "$slug" in
+  ""|*[!a-z0-9-]*)
+    echo "Invalid repository name." >&2
+    exit 1
+    ;;
+esac
+
+repo="/var/lib/paas/repos/${slug}.git"
+if [ ! -d "$repo" ]; then
+  echo "Repository not found. Create the app in the NodePaaS dashboard first." >&2
+  exit 1
+fi
+
+if [ -x /usr/bin/git-receive-pack ]; then
+  exec /usr/bin/git-receive-pack "$repo"
+fi
+exec git receive-pack "$repo"
