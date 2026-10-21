@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/yepyaeaung13/nodejs-paas/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Documentation
+    url: https://github.com/yepyaeaung13/nodejs-paas#readme
+    about: Read the installation and operations documentation.

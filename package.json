@@ -3,6 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "description": "A lightweight, Docker-free PaaS for Node.js on small VPS servers",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yepyaeaung13/nodejs-paas.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yepyaeaung13/nodejs-paas/issues"
+  },
+  "homepage": "https://github.com/yepyaeaung13/nodejs-paas#readme",
+  "keywords": [
+    "paas",
+    "self-hosted",
+    "nodejs",
+    "systemd",
+    "caddy",
+    "deployment",
+    "docker-free"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.5.0"

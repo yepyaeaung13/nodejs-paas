@@ -1,8 +1,16 @@
 # NodePaaS
 
+[![CI](https://github.com/yepyaeaung13/nodejs-paas/actions/workflows/ci.yml/badge.svg)](https://github.com/yepyaeaung13/nodejs-paas/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/yepyaeaung13/nodejs-paas/actions/workflows/codeql.yml/badge.svg)](https://github.com/yepyaeaung13/nodejs-paas/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A small, Docker-free PaaS for deploying Node.js apps on a single Linux VPS. Push to a git remote, NodePaaS builds the app, runs it under systemd, and routes a domain to it through Caddy. It also provisions a database per app.
 
-Built for 512 MB–2 GB servers. No Kubernetes, no Docker daemon, no container overhead.
+Built for 512 MB-2 GB servers. No Kubernetes, no Docker daemon, no container overhead.
+
+> **Project status:** early-stage and single-operator. NodePaaS is not a
+> container, VM, or security sandbox. Do not deploy untrusted code. See
+> [SECURITY.md](SECURITY.md) for the threat model.
 
 ## What it does
 
@@ -20,18 +28,19 @@ Built for 512 MB–2 GB servers. No Kubernetes, no Docker daemon, no container o
 
 ## Architecture
 
-```
-Browser ──> Caddy (80/443) ──> NodePaaS dashboard :3000
-                                  │
-                                  ├── SQLite control DB /var/lib/paas/paas.db
-                                  ├── bare git repos /var/lib/paas/repos
-                                  ├── app releases /var/lib/paas/apps
-                                  └── systemd units paas-<app>.service
-                                           │
-Git SSH ──> paas-git-hook ──> git-receive-pack ──> post-receive hook
-                                                       │
-                                                       └── POST /api/internal/deploy/<app>
-Domain ──> Caddy ──> 127.0.0.1:<app port>
+```text
+Browser --> Caddy (80/443) --> NodePaaS dashboard :3000
+                                  |
+                                  +-- SQLite control DB /var/lib/paas/paas.db
+                                  +-- bare git repos /var/lib/paas/repos
+                                  +-- app releases /var/lib/paas/apps
+                                  +-- systemd units paas-<app>.service
+
+Git SSH --> paas-git-hook --> git-receive-pack --> post-receive hook
+                                                       |
+                                                       +--> POST /api/internal/deploy/<app>
+
+Domain --> Caddy --> 127.0.0.1:<app port>
 ```
 
 The control plane runs as root because it creates system users, writes systemd units, and runs `systemctl`. Generated app services run as unprivileged `app_<name>` users with systemd hardening options.
@@ -49,7 +58,7 @@ The control plane runs as root because it creates system users, writes systemd u
 ## Install
 
 ```bash
-git clone <this-project> nodejs-paas
+git clone https://github.com/yepyaeaung13/nodejs-paas.git
 cd nodejs-paas
 sudo bash scripts/install.sh --ssh-host git.example.com
 ```
@@ -89,7 +98,7 @@ Only these ports need to be public:
 - `22/tcp` for git over SSH
 - `80/tcp` and `443/tcp` for Caddy
 
-The control plane listens on `3000`, and apps listen on `3100–3999`. Keep those private. With UFW:
+The control plane listens on `3000`, and apps listen on `3100-3999`. Keep those private. With UFW:
 
 ```bash
 sudo ufw allow OpenSSH
@@ -280,12 +289,15 @@ Environment variables are read from the process or an optional `.env` file.
 
 ## Security notes
 
+See [SECURITY.md](SECURITY.md) for the full threat model and private
+vulnerability-reporting process.
+
 - This is a single-operator PaaS. Every SSH key added to the dashboard can push to every app repository. There are no per-app deploy permissions.
 - The control plane runs as root. Generated app services run as unprivileged users with systemd hardening, but this is not a container or a VM. Do not run untrusted code.
 - Secrets are stored on disk: the control database is mode `0600`, app environment files are `0640` for the app group, and the internal token is `0640` for the `paas` group.
 - The dashboard is protected by a signed HTTP-only session cookie with `SameSite=Lax`. Use HTTPS for the dashboard.
 - Login attempts are rate-limited per client IP. The default trusted proxy is loopback, so configure `PAAS_TRUST_PROXY` if Caddy runs elsewhere.
-- App ports are not firewalled by NodePaaS. Restrict `3100–3999` with your firewall.
+- App ports are not firewalled by NodePaaS. Restrict `3100-3999` with your firewall.
 - The installer writes a Caddyfile that imports NodePaaS-managed config. If you already had a Caddyfile, a timestamped backup is created.
 
 ## Troubleshooting
@@ -346,4 +358,12 @@ scripts/
 - No automatic PostgreSQL/MySQL backups.
 - No per-app SSH deploy keys.
 - No Windows or macOS production mode; use mock mode there.
-# nodejs-paas
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Security
+issues should be reported privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

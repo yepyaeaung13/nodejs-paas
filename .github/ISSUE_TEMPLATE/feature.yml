@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest an improvement for NodePaaS
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you would like.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and privilege impact
+      description: Does this change authentication, systemd, file permissions, shell execution, Caddy, or app isolation?
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I understand NodePaaS is a single-server, single-operator tool.
+          required: true
