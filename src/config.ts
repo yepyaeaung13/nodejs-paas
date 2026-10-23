@@ -53,6 +53,14 @@ export const config = {
     env("PAAS_CADDY_CONFIG") ??
     (isLinux ? "/etc/paas/apps.caddy" : path.join(dataDir, "apps.caddy")),
   caddyService: env("PAAS_CADDY_SERVICE") ?? "caddy",
+  githubAppId: env("PAAS_GITHUB_APP_ID"),
+  githubPrivateKeyFile:
+    env("PAAS_GITHUB_PRIVATE_KEY_FILE") ??
+    (isLinux ? "/etc/paas/github-app.pem" : path.join(dataDir, "github-app.pem")),
+  githubWebhookSecret: env("PAAS_GITHUB_WEBHOOK_SECRET"),
+  githubAppSlug: env("PAAS_GITHUB_APP_SLUG"),
+  githubApiUrl: (env("PAAS_GITHUB_API_URL") ?? "https://api.github.com").replace(/\/+$/, ""),
+  githubWebUrl: (env("PAAS_GITHUB_WEB_URL") ?? "https://github.com").replace(/\/+$/, ""),
   dashboardDomain: env("PAAS_DASHBOARD_DOMAIN")?.toLowerCase(),
   systemdDir: env("PAAS_SYSTEMD_DIR") ?? (isLinux ? "/etc/systemd/system" : path.join(dataDir, "systemd")),
   appPortStart,

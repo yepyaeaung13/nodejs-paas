@@ -24,6 +24,15 @@ import {
 } from "./system.js";
 import { normalizeDomain, validateAppName, validateCommand } from "../lib/validation.js";
 import { chownIfPossible, ensureDir } from "../lib/fsx.js";
+import { triggerDeployment } from "./deployer.js";
+
+export interface GithubSourceInput {
+  type: "github";
+  installationId: number;
+  repoId: number;
+  repoFullName: string;
+  branch: string;
+}
 
 export interface CreateAppInput {
   name: string;
@@ -32,6 +41,7 @@ export interface CreateAppInput {
   buildCmd?: string | null;
   installCmd?: string | null;
   memoryMb?: number | null;
+  source?: GithubSourceInput;
 }
 
 async function portFree(port: number): Promise<boolean> {
@@ -74,6 +84,11 @@ export async function createApp(input: CreateAppInput): Promise<AppRow> {
     buildCmd,
     startCmd,
     memoryMb,
+    sourceType: input.source?.type ?? "git",
+    githubInstallationId: input.source?.installationId ?? null,
+    githubRepoId: input.source?.repoId ?? null,
+    githubRepoFullName: input.source?.repoFullName ?? null,
+    githubBranch: input.source?.branch ?? null,
   });
 
   try {
@@ -83,10 +98,14 @@ export async function createApp(input: CreateAppInput): Promise<AppRow> {
     await writeEnvFile(app, [], undefined);
     const ids = await getUserIds(name).catch(() => null);
     if (ids) await chownIfPossible(appDir(name), 0, ids.gid);
-    await createBareRepo(name);
+    await createBareRepo(app);
     await reloadCaddy(listAppRows()).catch((error) => {
       appLog(`created ${name} but Caddy reload failed: ${error instanceof Error ? error.message : String(error)}`);
     });
+    if (app.source_type === "github") {
+      await triggerDeployment(app);
+      return getApp(name) ?? app;
+    }
     return app;
   } catch (error) {
     await rollbackCreate(app);

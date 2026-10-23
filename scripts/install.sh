@@ -159,6 +159,10 @@ if [ -n "$DASHBOARD_DOMAIN" ]; then
 else
   PUBLIC_URL="http://$SSH_HOST:3000"
 fi
+GITHUB_ENV=""
+if [ -f "$CONFIG_DIR/paas.env" ]; then
+  GITHUB_ENV="$(grep -E '^PAAS_GITHUB_[A-Z_]+=' "$CONFIG_DIR/paas.env" || true)"
+fi
 cat > "$CONFIG_DIR/paas.env" <<EOF
 PAAS_HOST=0.0.0.0
 PAAS_PORT=3000
@@ -175,6 +179,9 @@ NODE_ENV=production
 EOF
 if [ -n "$DASHBOARD_DOMAIN" ]; then
   echo "PAAS_DASHBOARD_DOMAIN=$DASHBOARD_DOMAIN" >> "$CONFIG_DIR/paas.env"
+fi
+if [ -n "$GITHUB_ENV" ]; then
+  printf '%s\n' "$GITHUB_ENV" >> "$CONFIG_DIR/paas.env"
 fi
 chmod 0640 "$CONFIG_DIR/paas.env"
 chown root:root "$CONFIG_DIR/paas.env"

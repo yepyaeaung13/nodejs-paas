@@ -14,7 +14,8 @@ Built for 512 MB-2 GB servers. No Kubernetes, no Docker daemon, no container ove
 
 ## What it does
 
-- Git-push deploys from `main` or `master`
+- Git-push deploys over SSH from `main` or `master`
+- GitHub App deploys from any selected repository branch
 - Isolated Linux users and systemd services per app
 - Optional `MemoryMax` limits per app
 - Caddy reverse proxy with automatic HTTPS
@@ -36,9 +37,9 @@ Browser --> Caddy (80/443) --> NodePaaS dashboard :3000
                                   +-- app releases /var/lib/paas/apps
                                   +-- systemd units paas-<app>.service
 
-Git SSH --> paas-git-hook --> git-receive-pack --> post-receive hook
-                                                       |
-                                                       +--> POST /api/internal/deploy/<app>
+Git SSH --> paas-git-hook --> git-receive-pack --> post-receive hook --+
+                                                                        +--> deployment queue
+GitHub App --> push webhook --> POST /api/github/webhook --------------+
 
 Domain --> Caddy --> 127.0.0.1:<app port>
 ```
@@ -120,6 +121,9 @@ sudo systemctl restart paas
 
 ## First deployment
 
+For a GitHub repository, you can skip SSH keys and connect the repository
+through a GitHub App instead. See [GitHub App deployments](#github-app-deployments).
+
 1. Open **SSH keys** in the dashboard and add your public key:
 
    ```bash
@@ -153,6 +157,77 @@ Override any of them in the app's **Settings** tab. Command and memory changes t
 ### Deployments and rollback
 
 Deployments run one at a time per app. If a deployment fails, NodePaaS switches back to the previous release and restores that release's start command and systemd unit. A failed first deployment removes the half-created service and release link. Deployment logs are retained in the control database and capped at 1 MiB per deployment; the dashboard keeps the most recent live output.
+
+## GitHub App deployments
+
+NodePaaS can deploy a GitHub repository without SSH keys. It uses one GitHub
+App per NodePaaS instance. The app is installed on the repositories you choose,
+and a webhook starts a deployment whenever the selected branch is pushed.
+
+GitHub App deployments are currently GitHub.com only. A repository and branch
+are fixed when the NodePaaS app is created; create another NodePaaS app to
+deploy a different branch. Direct pushes to a GitHub-backed NodePaaS repository
+are rejected so that GitHub remains the source of truth.
+
+### Create and install the GitHub App
+
+1. In GitHub, open **Settings > Developer settings > GitHub Apps > New GitHub
+   App**. The settings can belong to your personal account or an organization.
+2. Set **Homepage URL** to the dashboard URL. Set **Webhook URL** to:
+
+   ```text
+   https://paas.example.com/api/github/webhook
+   ```
+
+   The webhook URL must be reachable from GitHub. Set a long random **Webhook
+   secret** and keep it for the next step.
+3. Under **Repository permissions**, grant **Contents: Read-only** and
+   **Metadata: Read-only**. Under **Subscribe to events**, enable **Push**.
+4. Create the app, generate a private key, and download the `.pem` file.
+5. Install the app and select the repositories NodePaaS may deploy.
+6. On the server, put the private key at `/etc/paas/github-app.pem` and add the
+   app details to `/etc/paas/paas.env`:
+
+   ```bash
+   sudo install -m 0600 -o root -g root github-app.pem /etc/paas/github-app.pem
+   sudoedit /etc/paas/paas.env
+   ```
+
+   Add these lines:
+
+   ```text
+   PAAS_GITHUB_APP_ID=123456
+   PAAS_GITHUB_APP_SLUG=my-nodepaas
+   PAAS_GITHUB_WEBHOOK_SECRET=the-secret-from-github
+   ```
+
+   Then restart:
+
+   ```bash
+   sudo systemctl restart paas
+   ```
+
+   Generate the webhook secret with `openssl rand -hex 32`. Use the numeric
+   **App ID**, not the Client ID. The slug is the last part of the app's GitHub
+   URL and is used for the install link.
+
+The private key path defaults to `/etc/paas/github-app.pem`. Set
+`PAAS_GITHUB_PRIVATE_KEY_FILE` if you store it elsewhere. The `paas` service
+runs as root, so the key and environment file must only be readable by root.
+The installer preserves existing `PAAS_GITHUB_*` entries in `/etc/paas/paas.env`
+when it is rerun.
+
+### Connect an app
+
+In the dashboard, create an app and choose **GitHub App**, then pick an
+installation, repository, and branch. NodePaaS verifies the repository and
+branch, creates the app, and starts the first deployment immediately. Later
+pushes to the selected branch deploy automatically.
+
+Installation tokens are scoped to the installation's selected repositories,
+are held in memory only, and are never written to an app's environment. If the
+app is uninstalled or its access is revoked, deployments fail until access is
+restored.
 
 ## Databases
 
@@ -285,6 +360,12 @@ Environment variables are read from the process or an optional `.env` file.
 | `PAAS_SESSION_SECRET` | generated file | Session signing secret |
 | `PAAS_INTERNAL_TOKEN` | generated file | Internal deploy token |
 | `PAAS_ADMIN_USER` / `PAAS_ADMIN_PASSWORD` | unset | Optional bootstrap admin |
+| `PAAS_GITHUB_APP_ID` | unset | GitHub App numeric ID; enables GitHub imports |
+| `PAAS_GITHUB_APP_SLUG` | unset | GitHub App URL slug for the install link |
+| `PAAS_GITHUB_PRIVATE_KEY_FILE` | `/etc/paas/github-app.pem` | GitHub App private key |
+| `PAAS_GITHUB_WEBHOOK_SECRET` | unset | Secret used to verify GitHub webhooks |
+| `PAAS_GITHUB_API_URL` | `https://api.github.com` | GitHub API base URL |
+| `PAAS_GITHUB_WEB_URL` | `https://github.com` | GitHub web base URL |
 | `PAAS_MOCK` | auto on non-Linux | Simulate privileged commands |
 
 ## Security notes
@@ -299,6 +380,8 @@ vulnerability-reporting process.
 - Login attempts are rate-limited per client IP. The default trusted proxy is loopback, so configure `PAAS_TRUST_PROXY` if Caddy runs elsewhere.
 - App ports are not firewalled by NodePaaS. Restrict `3100-3999` with your firewall.
 - The installer writes a Caddyfile that imports NodePaaS-managed config. If you already had a Caddyfile, a timestamped backup is created.
+- GitHub App credentials are deployment credentials. Keep the private key root-only (`0600`), use a random webhook secret, and use a separate GitHub App for each NodePaaS instance. Installation tokens are read-only, repository-scoped, held in memory, and never exposed to apps.
+- GitHub webhooks are authenticated by `X-Hub-Signature-256` against the raw request body. Keep the webhook endpoint on HTTPS and do not disable signature verification at a proxy.
 
 ## Troubleshooting
 
@@ -320,6 +403,38 @@ curl -fsS http://127.0.0.1:3000/api/health
 
 The `paas` user needs read access to `/etc/paas/internal.token`, and the repository must exist. Add the key in the dashboard, not directly to `authorized_keys` (the file is regenerated).
 
+**GitHub App is not configured**
+
+`GET /api/github/status` lists missing settings. Confirm `PAAS_GITHUB_APP_ID`,
+`PAAS_GITHUB_APP_SLUG`, `PAAS_GITHUB_PRIVATE_KEY_FILE`, and
+`PAAS_GITHUB_WEBHOOK_SECRET` are set, then restart the control plane:
+
+```bash
+sudo systemctl restart paas
+sudo journalctl -u paas -n 100 --no-pager
+```
+
+The private key must be a readable PEM file and the App ID must be the numeric
+ID, not the Client ID.
+
+**GitHub webhook returns 401**
+
+The webhook secret in `/etc/paas/paas.env` does not match the one in the GitHub
+App settings. Update both, restart NodePaaS, and redeliver the webhook from
+GitHub's **Advanced** tab. A proxy must forward the request body unchanged.
+
+**A GitHub push does not deploy**
+
+Confirm the push is to the branch selected when the app was created, the GitHub
+App is installed on that repository, and the `push` event is enabled. Check the
+app's **Deployments** tab and GitHub's webhook delivery log for failed
+deliveries.
+
+**No repositories appear in the GitHub picker**
+
+Install the GitHub App on at least one repository and use **Refresh list** in
+the picker. The picker only lists repositories granted to the installation.
+
 **Caddy does not get a certificate**
 
 Confirm DNS points at the server and ports 80/443 are reachable. Check `journalctl -u caddy -n 100 --no-pager`.
@@ -340,9 +455,9 @@ src/
   db.ts                 control SQLite schema and queries
   auth.ts               signed sessions and login throttling
   server.ts             Fastify setup and middleware
-  lib/                  command, filesystem, HTTP, password, validation
-  services/             apps, Caddy, databases, deployer, git, logs, SSH, systemd
-  routes/               auth, apps, keys, system, internal deploy hook
+  lib/                  command, filesystem, GitHub, HTTP, password, validation
+  services/             apps, Caddy, databases, deployer, git, GitHub, logs, SSH, systemd
+  routes/               auth, apps, GitHub, keys, system, internal deploy hook
 public/                 dashboard HTML/CSS/JS
 scripts/
   install.sh            Linux installer
@@ -352,7 +467,8 @@ scripts/
 ## Limitations
 
 - Single server only; no clustering or scheduling.
-- One git remote per app; deploy branch is `main` or `master`.
+- One source per app. SSH-backed apps deploy from `main` or `master`; GitHub-backed apps use the single branch selected at creation.
+- GitHub.com only; no GitHub Enterprise Server or OAuth login.
 - One database per app.
 - No rollback button in the UI (failed deploys roll back automatically; releases are kept on disk).
 - No automatic PostgreSQL/MySQL backups.

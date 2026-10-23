@@ -777,6 +777,12 @@ svg {
   grid-template-columns: 1fr 1fr;
 }
 
+.source-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .form-actions {
   display: flex;
   align-items: center;

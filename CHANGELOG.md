@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- GitHub App deployments with repository and branch selection
+- Automatic deployments from GitHub `push` webhooks
+- One-time initial deployment when creating a GitHub-backed app
+- Repository access checks and read-only installation tokens
+- Git hook enforcement that rejects direct pushes to GitHub-backed apps
+
+### Security
+
+- GitHub webhook signature verification over the raw request body
+- Root-only GitHub App private key and memory-only installation token cache
+- Duplicate webhook delivery tracking
+
 ## [0.1.0] - 2026-10-21
 
 ### Added

@@ -19,6 +19,11 @@ export interface AppRow {
   install_cmd: string | null;
   build_cmd: string | null;
   start_cmd: string | null;
+  source_type: "git" | "github";
+  github_installation_id: number | null;
+  github_repo_id: number | null;
+  github_repo_full_name: string | null;
+  github_branch: string | null;
   created_at: string;
   updated_at: string;
   last_deployed_at: string | null;
@@ -91,6 +96,11 @@ db.exec(`
     install_cmd TEXT,
     build_cmd TEXT,
     start_cmd TEXT,
+    source_type TEXT NOT NULL DEFAULT 'git',
+    github_installation_id INTEGER,
+    github_repo_id INTEGER,
+    github_repo_full_name TEXT,
+    github_branch TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_deployed_at TEXT
@@ -137,6 +147,28 @@ db.exec(`
     fingerprint TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
+    delivery_id TEXT PRIMARY KEY,
+    received_at TEXT NOT NULL
+  );
+`);
+
+function ensureColumn(table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((item) => item.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+ensureColumn("apps", "source_type", "TEXT NOT NULL DEFAULT 'git'");
+ensureColumn("apps", "github_installation_id", "INTEGER");
+ensureColumn("apps", "github_repo_id", "INTEGER");
+ensureColumn("apps", "github_repo_full_name", "TEXT");
+ensureColumn("apps", "github_branch", "TEXT");
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS apps_github_repo_branch
+    ON apps(github_repo_id, github_branch)
+    WHERE source_type = 'github';
 `);
 
 function row<T>(value: Record<string, unknown> | undefined): T | undefined {
@@ -215,6 +247,32 @@ export function getAppById(id: number): AppRow | undefined {
   return row<AppRow>(db.prepare("SELECT * FROM apps WHERE id = ?").get(id) as Record<string, unknown> | undefined);
 }
 
+export function getGithubApp(repoId: number, branch: string): AppRow | undefined {
+  return row<AppRow>(
+    db
+      .prepare("SELECT * FROM apps WHERE source_type = 'github' AND github_repo_id = ? AND github_branch = ?")
+      .get(repoId, branch) as Record<string, unknown> | undefined,
+  );
+}
+
+export function recordGithubDelivery(deliveryId: string): boolean {
+  const result = run("INSERT OR IGNORE INTO github_webhook_deliveries (delivery_id, received_at) VALUES (?, ?)", [
+    deliveryId,
+    now(),
+  ]);
+  pruneGithubDeliveries();
+  return result.changes > 0;
+}
+
+export function deleteGithubDelivery(deliveryId: string): void {
+  run("DELETE FROM github_webhook_deliveries WHERE delivery_id = ?", [deliveryId]);
+}
+
+export function pruneGithubDeliveries(maxAgeDays = 7): void {
+  const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+  run("DELETE FROM github_webhook_deliveries WHERE received_at < ?", [cutoff]);
+}
+
 export function isPortTaken(port: number): boolean {
   return Boolean(db.prepare("SELECT 1 FROM apps WHERE port = ?").get(port));
 }
@@ -227,11 +285,20 @@ export function createApp(input: {
   buildCmd: string | null;
   startCmd: string | null;
   memoryMb: number | null;
+  sourceType?: "git" | "github";
+  githubInstallationId?: number | null;
+  githubRepoId?: number | null;
+  githubRepoFullName?: string | null;
+  githubBranch?: string | null;
 }): AppRow {
   const timestamp = now();
   const result = run(
-    `INSERT INTO apps (name, port, domain, status, memory_mb, install_cmd, build_cmd, start_cmd, created_at, updated_at)
-     VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO apps (
+       name, port, domain, status, memory_mb, install_cmd, build_cmd, start_cmd,
+       source_type, github_installation_id, github_repo_id, github_repo_full_name, github_branch,
+       created_at, updated_at
+     )
+     VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.name,
       input.port,
@@ -240,6 +307,11 @@ export function createApp(input: {
       input.installCmd,
       input.buildCmd,
       input.startCmd,
+      input.sourceType ?? "git",
+      input.githubInstallationId ?? null,
+      input.githubRepoId ?? null,
+      input.githubRepoFullName ?? null,
+      input.githubBranch ?? null,
       timestamp,
       timestamp,
     ],
@@ -257,6 +329,7 @@ export interface AppPatch {
   buildCmd?: string | null;
   startCmd?: string | null;
   lastDeployedAt?: string | null;
+  githubRepoFullName?: string;
 }
 
 export function updateApp(id: number, patch: AppPatch): void {
@@ -289,6 +362,10 @@ export function updateApp(id: number, patch: AppPatch): void {
   if (patch.lastDeployedAt !== undefined) {
     sets.push("last_deployed_at = ?");
     params.push(patch.lastDeployedAt);
+  }
+  if (patch.githubRepoFullName !== undefined) {
+    sets.push("github_repo_full_name = ?");
+    params.push(patch.githubRepoFullName);
   }
   if (sets.length === 0) return;
   sets.push("updated_at = ?");

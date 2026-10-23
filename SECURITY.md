@@ -41,6 +41,13 @@ sandbox.
   them with a firewall.
 - The dashboard must be served over HTTPS. The session cookie is HTTP-only and
   `SameSite=Lax`, but TLS is the operator's responsibility.
+- GitHub App credentials are privileged deployment credentials. The private key
+  is root-readable, can mint installation tokens, and must never be committed or
+  copied between NodePaaS instances.
+- GitHub webhooks authenticate with an HMAC over the raw request body. A proxy
+  that rewrites or buffers the body incorrectly can break verification.
+- GitHub installation tokens are scoped to the repositories selected during
+  installation, held in memory, and never written to app environments.
 
 Do not run untrusted or hostile code with NodePaaS. Only deploy applications
 that you would be willing to run directly on the host.
@@ -50,7 +57,8 @@ that you would be willing to run directly on the host.
 - Authentication and session handling
 - Command injection or path traversal in the control plane
 - Privilege escalation from an application user to root or another application
-- Git hook, deployment pipeline, and internal API authorization
+- Git hook, GitHub webhook, deployment pipeline, and internal API authorization
+- GitHub App private-key handling, installation-token scope, and webhook signature verification
 - Caddy configuration injection
 - Secret exposure through logs, the API, or generated files
 - Installer and file-permission issues
@@ -70,4 +78,8 @@ that you would be willing to run directly on the host.
 - Restrict the dashboard to trusted networks where possible.
 - Back up the control database and application data before upgrades.
 - Review application code before deploying it.
+- Store the GitHub App private key outside the repository with mode `0600`, and
+  use a distinct GitHub App and webhook secret per NodePaaS instance.
+- Revoke the GitHub App installation and rotate its private key and webhook
+  secret if either may have been exposed.
 - Never expose the internal API or app ports directly to the internet.

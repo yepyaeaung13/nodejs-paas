@@ -27,6 +27,9 @@ export async function internalRoutes(app: FastifyInstance): Promise<void> {
     const params = request.params as { slug: string };
     const found = getApp(params.slug);
     if (!found) throw new HttpError(404, "App not found");
+    if (found.source_type === "github") {
+      throw new HttpError(409, "This app deploys from GitHub and does not accept PaaS git pushes");
+    }
     const body = parseBody(deploySchema, request.body ?? {});
     const deployment = await triggerDeployment(found, { ref: body.ref, sha: body.sha });
     return reply.code(202).send({ deploymentId: deployment.id, status: deployment.status });

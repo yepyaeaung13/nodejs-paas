@@ -24,6 +24,7 @@ import {
   exportRelease,
   resolveRef,
 } from "./git.js";
+import { syncGithubSource } from "./github-source.js";
 import {
   appLog,
   buildEnvironment,
@@ -122,6 +123,15 @@ export async function triggerDeployment(
   app: AppRow,
   options: { ref?: string; sha?: string } = {},
 ): Promise<DeploymentRow> {
+  if (app.source_type === "github") {
+    const expectedRef = app.github_branch ? `refs/heads/${app.github_branch}` : null;
+    if (options.ref && options.ref !== expectedRef && options.ref !== app.github_branch) {
+      throw new Error("GitHub apps only deploy from their configured branch");
+    }
+    if (options.sha) throw new Error("GitHub apps cannot deploy an arbitrary commit");
+    const info = await syncGithubSource(app);
+    return queueDeployment(app, info.sha, info.message);
+  }
   const sha = await resolveRef(app.name, options.sha ?? options.ref);
   const info = await commitInfo(app.name, sha);
   return queueDeployment(app, info.sha, info.message);

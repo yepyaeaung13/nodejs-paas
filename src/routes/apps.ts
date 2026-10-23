@@ -13,6 +13,7 @@ import {
   type AppRow,
 } from "../db.js";
 import { HttpError, parseBody, requireUser } from "../lib/http.js";
+import { isValidGithubBranch } from "../lib/github.js";
 import { pathExists } from "../lib/fsx.js";
 import {
   appNameSchema,
@@ -22,8 +23,14 @@ import {
   envValueSchema,
   memoryMbSchema,
 } from "../lib/validation.js";
-import { createApp, removeApp, updateAppSettings } from "../services/apps.js";
+import { createApp, removeApp, updateAppSettings, type GithubSourceInput } from "../services/apps.js";
 import { destroyDatabase, provisionDatabase } from "../services/database.js";
+import {
+  GithubApiError,
+  GithubNotConfiguredError,
+  getBranch,
+  getRepositoryById,
+} from "../services/github.js";
 import {
   currentDeploymentLog,
   onDeploymentEvent,
@@ -39,6 +46,13 @@ import {
   unitStatus,
 } from "../services/system.js";
 
+const githubSourceSchema = z.object({
+  type: z.literal("github"),
+  installationId: z.number().int().positive(),
+  repoId: z.number().int().positive(),
+  branch: z.string().trim().max(200).refine(isValidGithubBranch, "Enter a valid branch name"),
+});
+
 const createAppSchema = z.object({
   name: appNameSchema,
   domain: domainSchema.optional(),
@@ -46,6 +60,7 @@ const createAppSchema = z.object({
   buildCmd: commandSchema.nullable().optional(),
   installCmd: commandSchema.nullable().optional(),
   memoryMb: memoryMbSchema.optional(),
+  source: githubSourceSchema.optional(),
 });
 
 const updateAppSchema = z.object({
@@ -71,6 +86,14 @@ function appOrThrow(name: string): AppRow {
   const app = getApp(name);
   if (!app) throw new HttpError(404, "App not found");
   return app;
+}
+
+function throwGithubError(error: unknown): never {
+  if (error instanceof GithubNotConfiguredError) throw new HttpError(503, error.message);
+  if (error instanceof GithubApiError) {
+    throw new HttpError(error.status === 404 ? 404 : 502, error.message);
+  }
+  throw error;
 }
 
 async function syncStatus(app: AppRow): Promise<AppRow> {
@@ -118,6 +141,22 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
     requireUser(request);
     const body = parseBody(createAppSchema, request.body);
     try {
+      let source: GithubSourceInput | undefined;
+      if (body.source) {
+        try {
+          const repository = await getRepositoryById(body.source.installationId, body.source.repoId);
+          const branch = await getBranch(body.source.installationId, repository, body.source.branch);
+          source = {
+            type: "github",
+            installationId: body.source.installationId,
+            repoId: repository.id,
+            repoFullName: repository.fullName,
+            branch: branch.name,
+          };
+        } catch (error) {
+          throwGithubError(error);
+        }
+      }
       const created = await createApp({
         name: body.name,
         domain: body.domain,
@@ -125,8 +164,12 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
         buildCmd: body.buildCmd,
         installCmd: body.installCmd,
         memoryMb: body.memoryMb,
+        source,
       });
-      return reply.code(201).send({ app: created, ssh: sshInfo(request, created) });
+      return reply.code(201).send({
+        app: created,
+        ssh: created.source_type === "github" ? null : sshInfo(request, created),
+      });
     } catch (error) {
       if (String(error).includes("UNIQUE constraint failed: apps.name")) {
         throw new HttpError(409, "That app name is already taken");
@@ -136,6 +179,12 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
       }
       if (String(error).includes("UNIQUE constraint failed: apps.port")) {
         throw new HttpError(409, "Port allocation collision, try again");
+      }
+      if (String(error).includes("UNIQUE constraint failed: apps.github_repo_id")) {
+        throw new HttpError(409, "That GitHub repository and branch is already connected to another app");
+      }
+      if (error instanceof GithubNotConfiguredError || error instanceof GithubApiError) {
+        throwGithubError(error);
       }
       throw error;
     }
@@ -151,7 +200,7 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
       deployments: listDeployments(found.id, 30),
       env: listEnv(found.id),
       database: getDatabase(found.id) ?? null,
-      ssh: sshInfo(request, found),
+      ssh: found.source_type === "github" ? null : sshInfo(request, found),
     });
   });
 
@@ -188,10 +237,14 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
     try {
       deployment = await triggerDeployment(found);
     } catch (error) {
+      if (error instanceof GithubNotConfiguredError || error instanceof GithubApiError) {
+        throwGithubError(error);
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (message.startsWith("No deployable commit") || message === "Invalid git reference") {
         throw new HttpError(400, message);
       }
+      if (message.startsWith("GitHub")) throw new HttpError(502, message);
       throw error;
     }
     return reply.code(202).send({ deployment });

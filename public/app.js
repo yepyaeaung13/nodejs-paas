@@ -17,6 +17,11 @@ const state = {
   env: [],
   database: null,
   keys: [],
+  github: null,
+  githubRepos: null,
+  githubBranches: null,
+  githubBranchRequest: 0,
+  newAppSource: "git",
   activeTab: "deployments",
   showDbUrl: false,
   modalOnClose: null,
@@ -38,6 +43,7 @@ const icons = {
   terminal: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="m7 9 3 3-3 3m6 0h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   globe: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M3 12h18M12 3c2.5 2.4 3.8 5.4 3.8 9S14.5 18.6 12 21c-2.5-2.4-3.8-5.4-3.8-9S9.5 5.4 12 3Z" stroke="currentColor" stroke-width="1.6"/></svg>`,
   git: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="6" r="2.5" stroke="currentColor" stroke-width="1.8"/><circle cx="18" cy="18" r="2.5" stroke="currentColor" stroke-width="1.8"/><circle cx="6" cy="18" r="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M6 8.5v7M8.5 6h4A3.5 3.5 0 0 1 16 9.5V15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+  github: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 19c-4 1.2-4-2.1-5.5-2.5M15 21v-3.3c0-.9.1-1.3-.4-1.7 2.3-.3 4.7-1.1 4.7-5.1a4 4 0 0 0-1.1-2.8 3.7 3.7 0 0 0-.1-2.8s-.9-.3-3 1.1a10.3 10.3 0 0 0-5.2 0C7.8 4.9 6.9 5.2 6.9 5.2a3.7 3.7 0 0 0-.1 2.8A4 4 0 0 0 5.7 11c0 4 2.4 4.8 4.7 5.1-.5.4-.5.9-.4 1.7V21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   database: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 5.5v6c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-6M4.5 11.5v6c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-6" stroke="currentColor" stroke-width="1.8"/></svg>`,
   cpu: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
   memory: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M7 10v4m3-4v4m3-4v4m3-4v4M6 4v3m4-3v3m4-3v3m4-3v3M6 17v3m4-3v3m4-3v3m4-3v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
@@ -222,6 +228,16 @@ function appUrl(app) {
   return `http://${host()}:${app.port}`;
 }
 
+function githubRepoUrl(app) {
+  if (!app.github_repo_full_name) return "https://github.com";
+  return `https://github.com/${app.github_repo_full_name.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function githubBranchUrl(app) {
+  if (!app.github_repo_full_name || !app.github_branch) return githubRepoUrl(app);
+  return `${githubRepoUrl(app)}/tree/${app.github_branch.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 function brandBlock() {
   return `<div class="brand"><div class="brand-mark">${icon("logo")}</div><div><div class="brand-name">NodePaaS</div><div class="brand-tag">Node deployments</div></div></div>`;
 }
@@ -361,7 +377,11 @@ function renderShell(route) {
 }
 
 async function loadShell() {
-  const [overview, system] = await Promise.all([api("/api/overview"), api("/api/system")]);
+  const [overview, system, github] = await Promise.all([
+    api("/api/overview"),
+    api("/api/system"),
+    api("/api/github/status").catch(() => null),
+  ]);
   state.overview = overview;
   state.apps = overview.apps || [];
   state.recent = overview.recent || [];
@@ -370,6 +390,7 @@ async function loadShell() {
   state.engines = system.engines || { sqlite: true, postgres: false, mysql: false };
   state.ssh = system.ssh || state.ssh;
   state.caddyConfig = system.caddyConfig || null;
+  state.github = github;
 }
 
 async function loadApp(name) {
@@ -444,6 +465,7 @@ function renderAppsView() {
         <div class="app-meta">
           <span class="meta-chip">:${app.port}</span>
           ${db}
+          ${app.source_type === "github" ? `<span class="meta-chip" title="${esc(app.github_repo_full_name || "")}">${icon("github")} ${esc(app.github_branch || "GitHub")}</span>` : ""}
           ${app.memory_mb ? `<span class="meta-chip">${icon("memory")} ${app.memory_mb} MB</span>` : ""}
         </div>
         <div class="app-card-foot">
@@ -570,6 +592,7 @@ function renderAppView() {
   const app = state.app;
   const ssh = state.ssh || { user: "paas", host: host(), remote: remoteFor(app) };
   const remote = ssh.remote || remoteFor(app);
+  const isGithub = app.source_type === "github";
   const isBusy = ["queued", "building", "starting"].includes(app.status);
   const canStart = app.status !== "idle";
   const deployAction = isBusy
@@ -582,6 +605,37 @@ function renderAppView() {
       : canStart
         ? `<button class="btn" data-action="app-start" data-name="${esc(app.name)}">${icon("play")} Start</button>`
         : "";
+  const sourceCard = isGithub
+    ? `<div class="card">
+        <div class="card-head"><div><h2 class="card-title">GitHub source</h2><p class="card-sub">Pushes to ${esc(app.github_branch || "the selected branch")} deploy automatically</p></div>${icon("github")}</div>
+        <div class="card-body">
+          <div class="copy-row">
+            <code class="code" id="remote-code">${esc(app.github_repo_full_name || "Unknown repository")}</code>
+            <button class="btn btn-sm btn-icon" data-action="copy" data-copy="${esc(app.github_repo_full_name || "")}" title="Copy repository name">${icon("copy")}</button>
+            <a class="btn btn-sm btn-icon" href="${esc(githubBranchUrl(app))}" target="_blank" rel="noreferrer" title="Open branch on GitHub">${icon("github")}</a>
+          </div>
+          <div class="kv-list" style="margin-top:10px">
+            <div class="kv-row"><span class="kv-label">Repository</span><span class="kv-value truncate" style="max-width:220px"><a class="link" href="${esc(githubRepoUrl(app))}" target="_blank" rel="noreferrer">${esc(app.github_repo_full_name || "-")}</a></span></div>
+            <div class="kv-row"><span class="kv-label">Branch</span><span class="kv-value mono">${esc(app.github_branch || "-")}</span></div>
+            <div class="kv-row"><span class="kv-label">Source</span><span class="kv-value">GitHub App</span></div>
+          </div>
+          <p class="hint" style="margin-top:10px">GitHub is the source of truth for this app. Direct SSH pushes are rejected. The Deploy button fetches the latest commit from the selected branch.</p>
+        </div>
+      </div>`
+    : `<div class="card">
+        <div class="card-head"><div><h2 class="card-title">Git remote</h2><p class="card-sub">Push to main to deploy</p></div>${icon("git")}</div>
+        <div class="card-body">
+          <div class="copy-row">
+            <code class="code" id="remote-code">${esc(remote)}</code>
+            <button class="btn btn-sm btn-icon" data-action="copy" data-copy="${esc(remote)}" title="Copy remote">${icon("copy")}</button>
+          </div>
+          <div class="copy-row" style="margin-top:7px">
+            <code class="code">git push paas main</code>
+            <button class="btn btn-sm btn-icon" data-action="copy" data-copy="git push paas main" title="Copy command">${icon("copy")}</button>
+          </div>
+          <p class="hint" style="margin-top:10px">Deploys run on <span class="mono">main</span> or <span class="mono">master</span>. Add your key in <a class="link" href="#/keys">SSH keys</a> first.</p>
+        </div>
+      </div>`;
 
   $("#view").innerHTML = `
     <div class="page-head">
@@ -602,20 +656,7 @@ function renderAppView() {
     </div>
 
     <div class="grid-2" style="align-items:start;margin-bottom:18px">
-      <div class="card">
-        <div class="card-head"><div><h2 class="card-title">Git remote</h2><p class="card-sub">Push to main to deploy</p></div>${icon("git")}</div>
-        <div class="card-body">
-          <div class="copy-row">
-            <code class="code" id="remote-code">${esc(remote)}</code>
-            <button class="btn btn-sm btn-icon" data-action="copy" data-copy="${esc(remote)}" title="Copy remote">${icon("copy")}</button>
-          </div>
-          <div class="copy-row" style="margin-top:7px">
-            <code class="code">git push paas main</code>
-            <button class="btn btn-sm btn-icon" data-action="copy" data-copy="git push paas main" title="Copy command">${icon("copy")}</button>
-          </div>
-          <p class="hint" style="margin-top:10px">Deploys run on <span class="mono">main</span> or <span class="mono">master</span>. Add your key in <a class="link" href="#/keys">SSH keys</a> first.</p>
-        </div>
-      </div>
+      ${sourceCard}
       <div class="card">
         <div class="card-head"><div><h2 class="card-title">Runtime</h2><p class="card-sub">Managed by systemd</p></div><a class="btn btn-sm" href="${esc(appUrl(app))}" target="_blank" rel="noreferrer">${icon("globe")} Open</a></div>
         <div class="card-body">
@@ -760,6 +801,7 @@ function renderSettingsTab() {
       <div class="card">
         <div class="card-head"><div><h2 class="card-title">Application settings</h2><p class="card-sub">Domain changes apply immediately; command and memory changes apply on the next deploy.</p></div></div>
         <div class="card-body form-grid">
+          ${app.source_type === "github" ? `<div class="info-banner">${icon("github")}<div>This app deploys from <span class="mono">${esc(app.github_repo_full_name || "GitHub")}</span> on branch <span class="mono">${esc(app.github_branch || "-")}</span>. The source repository and branch are fixed after creation.</div></div>` : ""}
           <div class="form-row">
             <div class="field"><label class="label" for="setting-domain">Domain</label><input class="input" id="setting-domain" name="domain" value="${esc(app.domain || "")}" placeholder="app.example.com" /><span class="hint">Caddy provisions HTTPS automatically when DNS points here.</span></div>
             <div class="field"><label class="label" for="setting-memory">Memory limit <span class="optional">(MB)</span></label><input class="input" id="setting-memory" name="memoryMb" type="number" min="64" max="16384" value="${app.memory_mb ?? ""}" placeholder="No limit" /><span class="hint">systemd MemoryMax. Leave blank for no limit.</span></div>
@@ -954,17 +996,172 @@ function setButtonBusy(button, busy, label = "Working…") {
   }
 }
 
+function githubSetupMarkup() {
+  if (!state.github?.configured) {
+    const missing = state.github?.missing?.length ? state.github.missing.join(", ") : "the GitHub App environment variables";
+    return `<div class="warn-banner">${icon("alert")}<div><b>GitHub App not configured.</b> Set <span class="mono">${esc(missing)}</span> on the server and restart NodePaaS. See the README for the GitHub App setup steps.</div></div>`;
+  }
+  return `<div class="info-banner">${icon("github")}<div><div>Only repositories selected during GitHub App installation are visible. <a class="link" href="${esc(state.github.installUrl || "#")}" target="_blank" rel="noreferrer">Manage repository access</a>.</div><button type="button" class="btn btn-sm" data-action="refresh-github-repos" style="margin-top:8px">${icon("refresh")} Refresh list</button></div></div>`;
+}
+
 function openNewApp() {
+  state.newAppSource = state.github?.configured ? "github" : "git";
+  state.githubBranches = null;
+  const isGithub = state.newAppSource === "github";
   showModal({
     title: "New application",
-    subtitle: "Creates a git repository, systemd service and an internal port.",
+    subtitle: "Creates a systemd service, internal port and deployment source.",
     body: `<form id="new-app-form" data-form="new-app" class="form-grid">
-      <div class="field"><label class="label" for="new-app-name">App name</label><input class="input" id="new-app-name" name="name" required minlength="3" maxlength="24" pattern="[a-z][a-z0-9-]*[a-z0-9]" placeholder="my-api" autocomplete="off" /><span class="hint">Lowercase letters, numbers and hyphens. Used for the git repo and Linux user.</span></div>
+      <div class="field"><label class="label" for="new-app-name">App name</label><input class="input" id="new-app-name" name="name" required minlength="3" maxlength="24" pattern="[a-z][a-z0-9-]*[a-z0-9]" placeholder="my-api" autocomplete="off" /><span class="hint">Lowercase letters, numbers and hyphens. Used for the Linux user and service.</span></div>
+      <div class="field">
+        <label class="label">Deployment source</label>
+        <div class="source-switch" id="new-app-source-switch">
+          <button type="button" class="btn btn-sm ${isGithub ? "" : "btn-primary"}" data-action="app-source" data-source="git">${icon("git")} Git over SSH</button>
+          <button type="button" class="btn btn-sm ${isGithub ? "btn-primary" : ""}" data-action="app-source" data-source="github" ${state.github?.configured ? "" : "disabled"}>${icon("github")} GitHub App</button>
+        </div>
+        ${state.github && !state.github.configured ? `<span class="hint">GitHub App is not configured on this server. See the README to enable it.</span>` : ""}
+      </div>
+      <div id="git-source-fields" class="${isGithub ? "hidden" : ""}">
+        <div class="info-banner">${icon("terminal")}<div>Create the app, add your SSH key, then push to <span class="mono">main</span>. Pushes deploy automatically.</div></div>
+      </div>
+      <div id="github-source-fields" class="${isGithub ? "" : "hidden"}">
+        ${githubSetupMarkup()}
+        <div class="form-row" style="margin-top:12px">
+          <div class="field"><label class="label" for="new-app-repo">Repository</label><select class="select" id="new-app-repo" data-github-repo disabled><option value="">Loading repositories.</option></select></div>
+          <div class="field"><label class="label" for="new-app-branch">Branch</label><select class="select" id="new-app-branch" disabled><option value="">Select a repository first</option></select><span class="hint">Every push to this branch deploys automatically.</span></div>
+        </div>
+        <div id="github-source-error" class="error-banner hidden"></div>
+      </div>
       <div class="field"><label class="label" for="new-app-domain">Domain <span class="optional">(optional)</span></label><input class="input" id="new-app-domain" name="domain" placeholder="api.example.com" autocomplete="off" /><span class="hint">Point DNS here and Caddy will obtain a certificate.</span></div>
       <div id="new-app-error" class="error-banner hidden"></div>
     </form>`,
     footer: `<button class="btn" data-action="close-modal">Cancel</button><button class="btn btn-primary" type="submit" form="new-app-form">${icon("plus")} Create application</button>`,
   });
+  if (isGithub && state.github?.configured) void loadGithubRepositories();
+}
+
+function slugifyAppName(value) {
+  let slug = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 24);
+  if (!/^[a-z]/.test(slug)) slug = `app-${slug}`;
+  if (slug.length < 3) slug = `app-${slug || "service"}`;
+  slug = slug.replace(/-$/g, "").slice(0, 24);
+  return slug.length >= 3 && /^[a-z][a-z0-9-]*[a-z0-9]$/.test(slug) ? slug : "my-app";
+}
+
+function setNewAppSource(source) {
+  state.newAppSource = source;
+  for (const button of $$("#new-app-source-switch [data-action='app-source']")) {
+    button.classList.toggle("btn-primary", button.dataset.source === source);
+  }
+  $("#git-source-fields")?.classList.toggle("hidden", source !== "git");
+  $("#github-source-fields")?.classList.toggle("hidden", source !== "github");
+  if (source === "github" && state.github?.configured && state.githubRepos === null) {
+    void loadGithubRepositories();
+  } else if (source === "github" && state.githubRepos) {
+    populateGithubRepositories();
+  }
+}
+
+function setGithubSourceError(message) {
+  const node = $("#github-source-error");
+  if (!node) return;
+  node.textContent = message || "";
+  node.classList.toggle("hidden", !message);
+}
+
+async function loadGithubRepositories(force = false) {
+  const select = $("#new-app-repo");
+  if (!select) return;
+  select.disabled = true;
+  select.innerHTML = `<option value="">Loading repositories.</option>`;
+  setGithubSourceError("");
+  try {
+    const data = await api(`/api/github/repositories${force ? "?refresh=1" : ""}`);
+    state.githubRepos = data.repositories || [];
+    populateGithubRepositories();
+  } catch (error) {
+    state.githubRepos = [];
+    select.innerHTML = `<option value="">Could not load repositories</option>`;
+    setGithubSourceError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function populateGithubRepositories() {
+  const select = $("#new-app-repo");
+  if (!select) return;
+  const repositories = state.githubRepos || [];
+  if (!repositories.length) {
+    select.innerHTML = `<option value="">No repositories available</option>`;
+    select.disabled = true;
+    setGithubSourceError(
+      state.github?.installUrl
+        ? "Install the GitHub App on an account and grant it access to at least one repository."
+        : "Grant the GitHub App access to at least one repository.",
+    );
+    return;
+  }
+  select.innerHTML = repositories
+    .map(
+      (repo) =>
+        `<option value="${repo.id}" data-installation-id="${repo.installationId}" data-default-branch="${esc(repo.defaultBranch)}" data-full-name="${esc(repo.fullName)}">${esc(repo.fullName)}${repo.private ? " (private)" : ""}</option>`,
+    )
+    .join("");
+  select.disabled = false;
+  const current = repositories.find((repo) => String(repo.id) === select.value) || repositories[0];
+  select.value = String(current.id);
+  const nameInput = $("#new-app-name");
+  if (nameInput && !nameInput.value.trim()) nameInput.value = slugifyAppName(current.name);
+  void loadGithubBranches(current.id, current.installationId, current.defaultBranch);
+}
+
+async function loadGithubBranches(repoId, installationId, defaultBranch) {
+  const select = $("#new-app-branch");
+  if (!select) return;
+  const requestId = ++state.githubBranchRequest;
+  state.githubBranches = null;
+  select.disabled = true;
+  select.innerHTML = `<option value="">Loading branches.</option>`;
+  setGithubSourceError("");
+  try {
+    const data = await api(
+      `/api/github/repositories/${encodeURIComponent(repoId)}/branches?installationId=${encodeURIComponent(installationId)}`,
+    );
+    if (requestId !== state.githubBranchRequest || !$("#new-app-branch")) return;
+    const branches = data.branches || [];
+    state.githubBranches = branches;
+    if (!branches.length) {
+      select.innerHTML = `<option value="">No branches found</option>`;
+      select.disabled = true;
+      setGithubSourceError("This repository has no branches to deploy.");
+      return;
+    }
+    select.innerHTML = branches
+      .map((branch) => `<option value="${esc(branch.name)}">${esc(branch.name)}</option>`)
+      .join("");
+    const preferred = branches.find((branch) => branch.name === defaultBranch) || branches[0];
+    select.value = preferred.name;
+    select.disabled = false;
+  } catch (error) {
+    if (requestId !== state.githubBranchRequest || !$("#new-app-branch")) return;
+    select.innerHTML = `<option value="">Could not load branches</option>`;
+    setGithubSourceError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function handleGithubRepoChange() {
+  const select = $("#new-app-repo");
+  const option = select?.selectedOptions?.[0];
+  if (!option || !option.value) return;
+  const nameInput = $("#new-app-name");
+  if (nameInput && !nameInput.value.trim() && option.dataset.fullName) {
+    nameInput.value = slugifyAppName(option.dataset.fullName.split("/").pop());
+  }
+  void loadGithubBranches(Number(option.value), Number(option.dataset.installationId), option.dataset.defaultBranch || "main");
 }
 
 function openDeleteApp() {
@@ -1284,6 +1481,13 @@ document.addEventListener("click", async (event) => {
       case "new-app":
         openNewApp();
         break;
+      case "app-source":
+        if (target.dataset.source === "github" && !state.github?.configured) break;
+        setNewAppSource(target.dataset.source);
+        break;
+      case "refresh-github-repos":
+        await loadGithubRepositories(true);
+        break;
       case "open-app":
         if (event.target.closest("button[data-action='deploy']")) return;
         navigate(`#/apps/${encodeURIComponent(name)}`);
@@ -1370,6 +1574,10 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+document.addEventListener("change", (event) => {
+  if (event.target.matches("[data-github-repo]")) handleGithubRepoChange();
+});
+
 document.addEventListener("submit", async (event) => {
   const form = event.target.closest("form[data-form]");
   if (!form) return;
@@ -1401,18 +1609,47 @@ document.addEventListener("submit", async (event) => {
 
     if (kind === "new-app") {
       clearFormError("new-app-error");
+      setGithubSourceError("");
       const data = new FormData(form);
-      setButtonBusy(submit, true, "Creating…");
-      const result = await api("/api/apps", {
-        method: "POST",
-        body: {
-          name: String(data.get("name") || "").trim(),
-          domain: String(data.get("domain") || "").trim(),
-        },
-      });
+      let source;
+      if (state.newAppSource === "github") {
+        const repoSelect = $("#new-app-repo");
+        const repoOption = repoSelect?.selectedOptions?.[0];
+        const branch = String($("#new-app-branch")?.value || "").trim();
+        if (!state.github?.configured) {
+          formError("new-app-error", "Configure the GitHub App before creating a GitHub app");
+          return;
+        }
+        if (!repoOption?.value) {
+          formError("new-app-error", "Select a GitHub repository");
+          return;
+        }
+        if (!branch) {
+          formError("new-app-error", "Select a branch to deploy");
+          return;
+        }
+        source = {
+          type: "github",
+          installationId: Number(repoOption.dataset.installationId),
+          repoId: Number(repoOption.value),
+          branch,
+        };
+      }
+      setButtonBusy(submit, true, state.newAppSource === "github" ? "Connecting." : "Creating.");
+      const payload = {
+        name: String(data.get("name") || "").trim(),
+        domain: String(data.get("domain") || "").trim(),
+      };
+      if (source) payload.source = source;
+      const result = await api("/api/apps", { method: "POST", body: payload });
       closeModal();
+      state.githubRepos = null;
       await loadShell();
-      toast(`Application ${result.app.name} created`);
+      toast(
+        result.app.source_type === "github"
+          ? `Application ${result.app.name} created; first deployment queued`
+          : `Application ${result.app.name} created`,
+      );
       window.location.hash = `#/apps/${encodeURIComponent(result.app.name)}`;
       return;
     }

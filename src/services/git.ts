@@ -8,6 +8,7 @@ import {
   pathExists,
   writeFileAtomic,
 } from "../lib/fsx.js";
+import type { AppRow } from "../db.js";
 import { appLog, getUserIdsByName } from "./system.js";
 
 function shQuote(value: string): string {
@@ -41,27 +42,44 @@ done
 `;
 }
 
-export async function createBareRepo(slug: string): Promise<string> {
-  const repo = repoDir(slug);
+export function preReceiveHook(): string {
+  return `#!/bin/sh
+cat >/dev/null
+echo "This app deploys from GitHub. Push to the selected GitHub branch instead." >&2
+exit 1
+`;
+}
+
+type HookApp = Pick<AppRow, "name" | "source_type">;
+
+export async function createBareRepo(app: HookApp): Promise<string> {
+  const repo = repoDir(app.name);
   await ensureDir(path.dirname(repo), 0o750);
   if (!(await pathExists(repo))) {
     await runCommand("git", ["init", "--bare", repo], { timeoutMs: 30000 });
   }
   await runCommand("git", gitArgs(repo, ["symbolic-ref", "HEAD", "refs/heads/main"]), { timeoutMs: 10000 });
   await runCommand("git", gitArgs(repo, ["config", "core.logAllRefUpdates", "true"]), { timeoutMs: 10000 });
-  await installHook(slug);
-  await chownRepo(slug);
+  await installHook(app);
+  await chownRepo(app.name);
   return repo;
 }
 
-export async function installHook(slug: string): Promise<void> {
-  const repo = repoDir(slug);
-  const hookPath = path.join(repo, "hooks", "post-receive");
-  await fsp.mkdir(path.join(repo, "hooks"), { recursive: true });
-  await writeFileAtomic(hookPath, postReceiveHook(slug), 0o755);
-  if (!config.mock) {
-    await fsp.chmod(hookPath, 0o755).catch(() => undefined);
+export async function installHook(app: HookApp): Promise<void> {
+  const repo = repoDir(app.name);
+  const hooksDir = path.join(repo, "hooks");
+  const postReceive = path.join(hooksDir, "post-receive");
+  const preReceive = path.join(hooksDir, "pre-receive");
+  await fsp.mkdir(hooksDir, { recursive: true });
+  if (app.source_type === "github") {
+    await writeFileAtomic(preReceive, preReceiveHook(), 0o755);
+    await fsp.rm(postReceive, { force: true }).catch(() => undefined);
+    await fsp.chmod(preReceive, 0o755).catch(() => undefined);
+    return;
   }
+  await writeFileAtomic(postReceive, postReceiveHook(app.name), 0o755);
+  await fsp.rm(preReceive, { force: true }).catch(() => undefined);
+  await fsp.chmod(postReceive, 0o755).catch(() => undefined);
 }
 
 async function chownRepo(slug: string): Promise<void> {
@@ -107,6 +125,65 @@ export async function resolveRef(slug: string, ref?: string): Promise<string> {
 export interface CommitInfo {
   sha: string;
   message: string;
+}
+
+export async function fetchGithubBranch(
+  app: AppRow,
+  repository: { fullName: string; cloneUrl: string },
+  branch: string,
+  token: string,
+  fallbackSha = "",
+): Promise<CommitInfo> {
+  if (config.mock) {
+    const sha = /^[0-9a-f]{40}$/i.test(fallbackSha) ? fallbackSha : "0".repeat(40);
+    return { sha, message: `GitHub ${repository.fullName}@${branch}` };
+  }
+  if (!/^https:\/\//.test(repository.cloneUrl)) {
+    throw new Error("GitHub returned an unsupported clone URL");
+  }
+  if (!/^[A-Za-z0-9._/-]{1,200}$/.test(branch) || branch.startsWith("-")) {
+    throw new Error("Invalid GitHub branch name");
+  }
+  const ids = await getUserIdsByName(config.sshUser);
+  if (!ids) throw new Error(`Could not resolve the ${config.sshUser} system user`);
+  const authorization = `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+  const refspec = `+refs/heads/${branch}:refs/remotes/github/${branch}`;
+  const repo = repoDir(app.name);
+  await runCommand(
+    "git",
+    gitArgs(repo, [
+      "fetch",
+      "--depth=1",
+      "--no-tags",
+      "--force",
+      "--no-write-fetch-head",
+      repository.cloneUrl,
+      refspec,
+    ]),
+    {
+      uid: ids.uid,
+      gid: ids.gid,
+      timeoutMs: 180_000,
+      env: {
+        GIT_TERMINAL_PROMPT: "0",
+        GCM_INTERACTIVE: "never",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "http.extraHeader",
+        GIT_CONFIG_VALUE_0: `Authorization: ${authorization}`,
+      },
+    },
+  );
+  const result = await runCommand(
+    "git",
+    gitArgs(repo, ["rev-parse", "--verify", "--quiet", `refs/remotes/github/${branch}^{commit}`]),
+    { allowFailure: true, timeoutMs: 10000 },
+  );
+  const sha = result.stdout.trim();
+  if (result.code !== 0 || !/^[0-9a-f]{40}$/.test(sha)) {
+    throw new Error(`Could not resolve GitHub branch "${branch}"`);
+  }
+  const info = await commitInfo(app.name, sha);
+  return { sha, message: info.message || `GitHub ${repository.fullName}@${branch}` };
 }
 
 export async function commitInfo(slug: string, sha: string): Promise<CommitInfo> {

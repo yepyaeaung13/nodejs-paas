@@ -4,10 +4,17 @@ import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { requireUser } from "./lib/http.js";
 import { config } from "./config.js";
-import { failInterruptedWork, getUserCount, createUser, listApps } from "./db.js";
+import {
+  failInterruptedWork,
+  getUserCount,
+  createUser,
+  listApps,
+  pruneGithubDeliveries,
+} from "./db.js";
 import { hashPassword } from "./lib/password.js";
 import { authRoutes } from "./routes/auth.js";
 import { appRoutes } from "./routes/apps.js";
+import { githubRoutes } from "./routes/github.js";
 import { internalRoutes } from "./routes/internal.js";
 import { keyRoutes } from "./routes/keys.js";
 import { systemRoutes } from "./routes/system.js";
@@ -15,7 +22,13 @@ import { reloadCaddy } from "./services/caddy.js";
 import { installHook } from "./services/git.js";
 import { syncAuthorizedKeys } from "./services/ssh.js";
 
-const PUBLIC_API = new Set(["/api/health", "/api/auth", "/api/setup", "/api/login"]);
+declare module "fastify" {
+  interface FastifyRequest {
+    rawBody?: Buffer;
+  }
+}
+
+const PUBLIC_API = new Set(["/api/health", "/api/auth", "/api/setup", "/api/login", "/api/github/webhook"]);
 
 function pathname(url: string | undefined): string {
   if (!url) return "/";
@@ -39,9 +52,10 @@ function bootstrapAdmin(): void {
 export async function start(): Promise<void> {
   failInterruptedWork();
   bootstrapAdmin();
+  pruneGithubDeliveries();
 
   for (const existing of listApps()) {
-    await installHook(existing.name).catch((error) => {
+    await installHook(existing).catch((error) => {
       console.warn(
         `[paas] could not refresh git hook for ${existing.name}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -57,6 +71,23 @@ export async function start(): Promise<void> {
   });
 
   await app.register(cookie);
+
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (request, body, done) => {
+    const raw = Buffer.isBuffer(body) ? body : Buffer.from(body);
+    request.rawBody = raw;
+    if (raw.length === 0) {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(raw.toString("utf8")));
+    } catch {
+      const error = new Error("Invalid JSON body") as Error & { statusCode: number };
+      error.statusCode = 400;
+      done(error);
+    }
+  });
 
   app.addHook("onSend", async (_request, reply, payload) => {
     reply.header("X-Content-Type-Options", "nosniff");
@@ -96,6 +127,7 @@ export async function start(): Promise<void> {
   await app.register(authRoutes);
   await app.register(appRoutes);
   await app.register(keyRoutes);
+  await app.register(githubRoutes);
   await app.register(internalRoutes);
 
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));
