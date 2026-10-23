@@ -14,6 +14,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - One-time initial deployment when creating a GitHub-backed app
 - Repository access checks and read-only installation tokens
 - Git hook enforcement that rejects direct pushes to GitHub-backed apps
+- Local WSL installer with localhost defaults and optional OpenSSH setup
 
 ### Security
 

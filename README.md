@@ -92,6 +92,55 @@ The installer:
 
 Open the dashboard URL printed by the installer and create the first admin account.
 
+### WSL local install
+
+For local testing in WSL, use the WSL wrapper. It installs the same stack with
+`http://localhost:3000`, enables OpenSSH for pushes from inside WSL, and does
+not configure a public domain:
+
+```bash
+git clone https://github.com/yepyaeaung13/nodejs-paas.git
+cd nodejs-paas
+sudo bash scripts/install-wsl.sh
+```
+
+Options:
+
+```bash
+sudo bash scripts/install-wsl.sh --with-postgres --with-mysql
+sudo bash scripts/install-wsl.sh --ssh-host 172.20.10.2
+sudo bash scripts/install-wsl.sh --no-ssh
+```
+
+WSL must have systemd enabled. If `/run/systemd/system` is missing, add this to
+`/etc/wsl.conf`, run `wsl --shutdown` from PowerShell, and reopen WSL:
+
+```ini
+[boot]
+systemd=true
+```
+
+Open `http://localhost:3000` from Windows. If localhost forwarding is
+unavailable, run `hostname -I` inside WSL and open `http://<wsl-ip>:3000`.
+Apps without domains are reachable at `http://<host>:<app-port>`.
+
+To deploy over git from inside WSL:
+
+```bash
+ssh-keygen -t ed25519 -C "you@example.com"
+```
+
+Add `~/.ssh/id_ed25519.pub` on the dashboard's **SSH keys** page, then use the
+remote shown by the app:
+
+```bash
+git remote add paas paas@localhost:my-app.git
+git push paas main
+```
+
+GitHub webhooks require a public HTTPS URL, so `localhost` cannot receive
+GitHub pushes without a tunnel such as Cloudflare Tunnel or ngrok.
+
 ### Firewall
 
 Only these ports need to be public:
@@ -461,6 +510,7 @@ src/
 public/                 dashboard HTML/CSS/JS
 scripts/
   install.sh            Linux installer
+  install-wsl.sh        local WSL installer wrapper
   paas-git-hook         SSH forced-command git receive wrapper
 ```
 
